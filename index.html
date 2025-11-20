@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Triangle Shooter Plus</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: radial-gradient(circle at center, #001d3d, #000814);
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 16px;
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.8);
+        }
+        #restartButton {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: crimson;
+            color: white;
+            padding: 15px 30px;
+            font-size: 24px;
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 0 10px red;
+            display: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui"></div>
+<button id="restartButton">Restart</button>
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+window.addEventListener("resize", () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+});
+
+const gravity = 0.2;
+const recoilForce = 4;
+const bulletSpeed = 5;
+const friction = 0.98;
+const maxBullets = 20;
+let score = 0;
+let health = 5;
+let mouseX = canvas.width / 2;
+let mouseY = canvas.height / 2;
+let gameOver = false;
+let damageOverlay = 0;
+
+const restartButton = document.getElementById("restartButton");
+restartButton.onclick = () => {
+    score = 0;
+    health = 5;
+    gameOver = false;
+    player.x = canvas.width / 2;
+    player.y = canvas.height / 2;
+    player.vx = 0;
+    player.vy = 0;
+    bullets.length = 0;
+    enemies.length = 0;
+    spawnPoints();
+    restartButton.style.display = "none";
+    gameLoop();
+};
+
+const wallHitCooldown = 500;
+const speedThreshold = 10;
+const wallBuffer = 20;
+let lastWallHitTime = 0;
+
+class Player {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.vx = 0;
+        this.vy = 0;
+        this.angle = 0;
+    }
+    update() {
+        this.angle = Math.atan2(mouseY - this.y, mouseX - this.x);
+        this.vy += gravity;
+        this.vx *= friction;
+        this.x += this.vx;
+        this.y += this.vy;
+
+        const now = Date.now();
+        const checkWall = (condition, setCoord, velocity, setVelocity) => {
+            if (condition) {
+                if (Math.abs(velocity) > speedThreshold && now - lastWallHitTime > wallHitCooldown) {
+                    health = Math.max(0, health - 1);
+                    lastWallHitTime = now;
+                    damageOverlay = 1;
+                }
+                setCoord();
+                setVelocity();
+            }
+        };
+
+        checkWall(this.y < wallBuffer, () => this.y = wallBuffer, this.vy, () => this.vy = 0);
+        checkWall(this.y > canvas.height - wallBuffer, () => this.y = canvas.height - wallBuffer, this.vy, () => this.vy = 0);
+        checkWall(this.x < wallBuffer, () => this.x = wallBuffer, this.vx, () => this.vx = 0);
+        checkWall(this.x > canvas.width - wallBuffer, () => this.x = canvas.width - wallBuffer, this.vx, () => this.vx = 0);
+    }
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        ctx.fillStyle = "aqua";
+        ctx.shadowColor = "cyan";
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.moveTo(20, 0);
+        ctx.lineTo(-15, 10);
+        ctx.lineTo(-15, -10);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+class Bullet {
+    constructor(x, y, vx, vy) {
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+    }
+    update() {
+        this.vy += gravity;
+        this.x += this.vx;
+        this.y += this.vy;
+    }
+    draw() {
+        ctx.fillStyle = "orange";
+        ctx.shadowColor = "yellow";
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+class Point {
+    constructor(x, y, color, value) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.value = value;
+    }
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.shadowColor = this.color;
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 20, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+class Enemy {
+    constructor() {
+        this.x = Math.random() * canvas.width;
+        this.y = -20;
+        this.speed = 1 + Math.random();
+        this.radius = 15;
+        this.repulsionForce = 0.5;
+    }
+    update() {
+        const angleToPlayer = Math.atan2(player.y - this.y, player.x - this.x);
+        const moveX = Math.cos(angleToPlayer) * this.speed;
+        const moveY = Math.sin(angleToPlayer) * this.speed;
+
+        let avoidX = 0, avoidY = 0, avoidCount = 0;
+        for (let other of enemies) {
+            if (other === this) continue;
+            const dx = other.x - this.x;
+            const dy = other.y - this.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const minDistance = this.radius + other.radius;
+            if (distance < minDistance * 1.5) {
+                const angle = Math.atan2(dy, dx);
+                const force = this.repulsionForce * (1 - distance / (minDistance * 1.5));
+                avoidX -= Math.cos(angle) * force;
+                avoidY -= Math.sin(angle) * force;
+                avoidCount++;
+            }
+        }
+
+        if (avoidCount > 0) {
+            this.x += (moveX + avoidX) / 2;
+            this.y += (moveY + avoidY) / 2;
+        } else {
+            this.x += moveX;
+            this.y += moveY;
+        }
+    }
+    draw() {
+        ctx.fillStyle = "crimson";
+        ctx.shadowColor = "red";
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+const player = new Player(canvas.width / 2, canvas.height / 2);
+const bullets = [], points = [], enemies = [];
+
+function spawnPoints() {
+    points.length = 0;
+    for (let i = 0; i < 8; i++) {
+        let x = Math.random() * (canvas.width - 40) + 20;
+        let y = Math.random() * (canvas.height - 40) + 20;
+        let color, value;
+        if (i % 4 === 0) color = "deepskyblue", value = 0;
+        else if (i % 4 === 1) color = "magenta", value = 3;
+        else if (i % 2 === 0) color = "yellow", value = 2;
+        else color = "lime", value = 1;
+        points.push(new Point(x, y, color, value));
+    }
+}
+
+function checkCollisions() {
+    points.forEach((point, index) => {
+        let dx = player.x - point.x;
+        let dy = player.y - point.y;
+        if (Math.sqrt(dx * dx + dy * dy) < 25) {
+            if (point.color === "yellow" || point.color === "lime") score += point.value;
+            if (point.color === "deepskyblue") health = Math.min(health + 1, 5);
+            points.splice(index, 1);
+        }
+        bullets.forEach((bullet, bIndex) => {
+            let bx = bullet.x - point.x;
+            let by = bullet.y - point.y;
+            if (Math.sqrt(bx * bx + by * by) < 20 && point.color === "lime") {
+                score += point.value;
+                points.splice(index, 1);
+                bullets.splice(bIndex, 1);
+            }
+        });
+    });
+    if (points.length === 0) spawnPoints();
+
+    enemies.forEach((enemy, eIndex) => {
+        let dx = player.x - enemy.x;
+        let dy = player.y - enemy.y;
+        if (Math.sqrt(dx * dx + dy * dy) < 25) {
+            enemies.splice(eIndex, 1);
+            health--;
+            damageOverlay = 1;
+        }
+        bullets.forEach((bullet, bIndex) => {
+            let bx = bullet.x - enemy.x;
+            let by = bullet.y - enemy.y;
+            if (Math.sqrt(bx * bx + by * by) < 20) {
+                score++;
+                enemies.splice(eIndex, 1);
+                bullets.splice(bIndex, 1);
+            }
+        });
+    });
+}
+
+function drawDamageOverlay() {
+    if (damageOverlay > 0) {
+        const g = ctx;
+        const alpha = 0.6 * damageOverlay;
+        const size = 150;
+
+        g.save();
+
+        let grad = g.createLinearGradient(0, 0, 0, size);
+        grad.addColorStop(0, `rgba(255, 0, 0, ${alpha})`);
+        grad.addColorStop(1, `rgba(255, 0, 0, 0)`);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, canvas.width, size);
+
+        grad = g.createLinearGradient(0, canvas.height, 0, canvas.height - size);
+        grad.addColorStop(0, `rgba(255, 0, 0, ${alpha})`);
+        grad.addColorStop(1, `rgba(255, 0, 0, 0)`);
+        g.fillStyle = grad;
+        g.fillRect(0, canvas.height - size, canvas.width, size);
+
+        grad = g.createLinearGradient(0, 0, size, 0);
+        grad.addColorStop(0, `rgba(255, 0, 0, ${alpha})`);
+        grad.addColorStop(1, `rgba(255, 0, 0, 0)`);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, size, canvas.height);
+
+        grad = g.createLinearGradient(canvas.width, 0, canvas.width - size, 0);
+        grad.addColorStop(0, `rgba(255, 0, 0, ${alpha})`);
+        grad.addColorStop(1, `rgba(255, 0, 0, 0)`);
+        g.fillStyle = grad;
+        g.fillRect(canvas.width - size, 0, size, canvas.height);
+
+        g.restore();
+        damageOverlay -= 0.02;
+    }
+}
+
+function spawnEnemies() {
+    if (Math.random() < 0.004) enemies.push(new Enemy());
+    if (enemies.length > 20) enemies.shift();
+}
+
+function shootAt(x, y) {
+    const angle = Math.atan2(player.y - y, player.x - x);
+    const bulletVx = Math.cos(angle) * bulletSpeed;
+    const bulletVy = Math.sin(angle) * bulletSpeed;
+    if (bullets.length >= maxBullets) bullets.shift();
+    bullets.push(new Bullet(player.x, player.y, bulletVx, bulletVy));
+    player.vx -= Math.cos(angle) * recoilForce;
+    player.vy -= Math.sin(angle) * recoilForce;
+}
+
+window.addEventListener("mousemove", e => (mouseX = e.clientX, mouseY = e.clientY));
+window.addEventListener("click", e => { if (!gameOver) shootAt(e.clientX, e.clientY); });
+canvas.addEventListener("touchstart", e => {
+    if (e.touches.length > 0) {
+        const touch = e.touches[0];
+        mouseX = touch.clientX;
+        mouseY = touch.clientY;
+        if (!gameOver) shootAt(mouseX, mouseY);
+    }
+});
+canvas.addEventListener("touchmove", e => {
+    if (e.touches.length > 0) {
+        const touch = e.touches[0];
+        mouseX = touch.clientX;
+        mouseY = touch.clientY;
+    }
+});
+
+const ui = document.getElementById("ui");
+function updateUI() {
+    ui.innerHTML = `Score: ${score}<br>Health: ${health}<br>Enemies: ${enemies.length}`;
+}
+
+function gameLoop() {
+    if (gameOver) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    player.update();
+    player.draw();
+    bullets.forEach(b => b.update());
+    bullets.forEach(b => b.draw());
+    points.forEach(p => p.draw());
+    enemies.forEach(e => e.update());
+    enemies.forEach(e => e.draw());
+    checkCollisions();
+    spawnEnemies();
+    updateUI();
+    drawDamageOverlay();
+
+    if (health <= 0) {
+        gameOver = true;
+        damageOverlay = 1;
+        drawDamageOverlay();
+        ctx.fillStyle = "white";
+        ctx.font = "48px sans-serif";
+        ctx.fillText("Game Over", canvas.width / 2 - 100, canvas.height / 2);
+        restartButton.style.display = "block";
+        return;
+    }
+    requestAnimationFrame(gameLoop);
+}
+
+spawnPoints();
+gameLoop();
+</script>
+</body>
+</html>
