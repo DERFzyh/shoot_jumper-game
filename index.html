@@ -150,37 +150,42 @@
         // --- Optimization & Physics Helpers ---
 
         // Generalized Wall Collision
-        function applyWallCollision(entity, bounce, isPlayer = false) {
+        function applyWallCollision(entity, wall, isPlayer = false) {
             if (!entity.physicsTraits.wallCollide) return;
 
             const now = Date.now();
             let hit = false;
 
-            // Floor
-            if (entity.y > canvas.height - wallBuffer) {
-                entity.y = canvas.height - wallBuffer;
-                entity.vy *= -bounce;
-                if (Math.abs(entity.vy) < PhysicsParams.GRAVITY) entity.vy = 0;
-                hit = true;
-            }
-            // Ceiling
-            else if (entity.y < wallBuffer) {
-                entity.y = wallBuffer;
-                entity.vy *= -bounce;
-                hit = true;
-            }
+            // Check for collision with the wall
+            if (entity.x < wall.x + wall.width &&
+                entity.x + entity.radius > wall.x &&
+                entity.y < wall.y + wall.height &&
+                entity.y + entity.radius > wall.y) {
 
-            // Left Wall
-            if (entity.x < wallBuffer) {
-                entity.x = wallBuffer;
-                entity.vx *= -bounce;
-                hit = true;
-            }
-            // Right Wall
-            else if (entity.x > canvas.width - wallBuffer) {
-                entity.x = canvas.width - wallBuffer;
-                entity.vx *= -bounce;
-                hit = true;
+                // Determine which side of the wall was hit
+                const overlapX = Math.min(entity.x + entity.radius - wall.x, wall.x + wall.width - entity.x);
+                const overlapY = Math.min(entity.y + entity.radius - wall.y, wall.y + wall.height - entity.y);
+
+                if (overlapX < overlapY) {
+                    // Horizontal collision
+                    if (entity.x < wall.x) {
+                        entity.x = wall.x - entity.radius;
+                    } else {
+                        entity.x = wall.x + wall.width;
+                    }
+                    entity.vx *= -wall.bounce;
+                    hit = true;
+                } else {
+                    // Vertical collision
+                    if (entity.y < wall.y) {
+                        entity.y = wall.y - entity.radius;
+                    } else {
+                        entity.y = wall.y + wall.height;
+                    }
+                    entity.vy *= -wall.bounce;
+                    if (Math.abs(entity.vy) < PhysicsParams.GRAVITY) entity.vy = 0;
+                    hit = true;
+                }
             }
 
             if (hit && isPlayer) {
@@ -229,7 +234,7 @@
                 this.mass = 60;       // kg
                 this.area = 0.5;      // m^2 (frontal area)
                 this.dragCoeff = 1.0; // Cd
-                this.radius = 20;
+                this.radius = 20;     // Radius for collision detection
 
                 this.physicsTraits = {
                     gravity: true,
@@ -290,18 +295,7 @@
                 this.y += this.vy;
 
                 // --- Collision Handling ---
-                applyWallCollision(this, PhysicsParams.GROUND_BOUNCE, true); // Player uses GROUND_BOUNCE for floor, but let's simplify to use passed bounce for all or specific logic inside. 
-                // Actually, the previous logic had different bounces for walls vs ground. 
-                // Let's stick to the helper but maybe refine it if needed. 
-                // For now, let's use WALL_BOUNCE as the generic, and maybe the helper needs to be smarter if we want distinct ground bounce.
-                // Re-reading helper: it uses `bounce` for everything. 
-                // Let's update helper to take separate params or just use WALL_BOUNCE for simplicity as requested "wall around everything".
-                // But wait, ground bounce was 0.3, wall was 0.5. 
-                // Let's modify the helper call to be specific or update helper. 
-                // For this pass, I'll use WALL_BOUNCE for simplicity, or I can manually do the ground check if I want to preserve exact behavior.
-                // Let's use the helper but pass WALL_BOUNCE. The ground specific bounce is a nice touch I might lose, but "Walls around everything" implies uniformity.
-                // However, to be better, let's modify the helper in the previous chunk? 
-                // Too late, I already wrote the chunk. I will stick to WALL_BOUNCE for now.
+                walls.forEach(wall => applyWallCollision(this, wall, true));
 
             }
             draw() {
@@ -401,6 +395,22 @@
             }
         }
 
+        class Wall {
+            constructor(x, y, width, height, bounce, roughness) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+                this.bounce = bounce;
+                this.roughness = roughness;
+            }
+
+            draw() {
+                ctx.fillStyle = "rgba(100, 100, 100, 0.5)"; // Semi-transparent grey for walls
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+            }
+        }
+
         class Enemy {
             constructor() {
                 this.x = Math.random() * canvas.width;
@@ -485,6 +495,18 @@
 
         const player = new Player(canvas.width / 2, canvas.height / 2);
         const bullets = [], points = [], enemies = [];
+        const walls = [];
+
+        function createWalls() {
+            // Top Wall
+            walls.push(new Wall(0, 0, canvas.width, wallBuffer, PhysicsParams.WALL_BOUNCE, PhysicsParams.WALL_ROUGHNESS));
+            // Bottom Wall
+            walls.push(new Wall(0, canvas.height - wallBuffer, canvas.width, wallBuffer, PhysicsParams.GROUND_BOUNCE, PhysicsParams.GROUND_ROUGHNESS));
+            // Left Wall
+            walls.push(new Wall(0, 0, wallBuffer, canvas.height, PhysicsParams.WALL_BOUNCE, PhysicsParams.WALL_ROUGHNESS));
+            // Right Wall
+            walls.push(new Wall(canvas.width - wallBuffer, 0, wallBuffer, canvas.height, PhysicsParams.WALL_BOUNCE, PhysicsParams.WALL_ROUGHNESS));
+        }
 
         function spawnPoints() {
             points.length = 0;
@@ -715,6 +737,8 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             player.update();
             player.draw();
+
+            walls.forEach(wall => wall.draw());
             // Cleanup inactive objects
             for (let i = bullets.length - 1; i >= 0; i--) {
                 if (!bullets[i].active) {
@@ -755,6 +779,7 @@
             requestAnimationFrame(gameLoop);
         }
 
+        createWalls();
         spawnPoints();
         gameLoop();
     </script>
